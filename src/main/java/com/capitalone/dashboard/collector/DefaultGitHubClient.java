@@ -36,6 +36,8 @@ import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
@@ -712,11 +714,11 @@ public class DefaultGitHubClient implements GitHubClient {
      */
 
     private static String getTimeForApi (Date dt) {
-        Calendar calendar = new GregorianCalendar();
-        TimeZone timeZone = calendar.getTimeZone();
-        Calendar cal = Calendar.getInstance(timeZone);
-        cal.setTime(dt);
-        return String.format("%tFT%<tRZ", cal);
+    	// Commit time and comparison time should both be in UTC, important for Rest call
+        TimeZone tz = TimeZone.getTimeZone("UTC");
+        DateFormat df = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm'Z'");
+        df.setTimeZone(tz);
+        return df.format(dt);
     }
 }
 
