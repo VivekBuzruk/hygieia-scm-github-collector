@@ -26,9 +26,13 @@ public class GitHubSettings {
     private int errorThreshold;
 	@Value("${github.rateLimitThreshold:10}")
 	private int rateLimitThreshold;
-	private String personalAccessToken;
+    private String personalAccessToken;
+    @Value("${github.ignore_errorThreshold:false}")
+    private boolean ignore_errorThreshold;
+    @Value("${github.bootRunFirst:false}")
+    private boolean bootRunFirst;
 
-
+    
 	public String getHost() {
 		return host;
 	}
@@ -124,5 +128,21 @@ public class GitHubSettings {
     public void setProxy(String proxy) {
                 this.proxy = proxy;
         }
-
+        
+	public boolean getIgnore_errorThreshold() {
+		return ignore_errorThreshold;
+	}
+	
+	public void setIgnore_errorThreshold(boolean ignore_errorThreshold) {
+		this.ignore_errorThreshold = ignore_errorThreshold;
+	}
+	
+        
+	public boolean getBootRunFirst() {
+		return bootRunFirst;
+	}
+	
+	public void setBootRunFirst(boolean bootRunFirst) {
+		this.bootRunFirst = bootRunFirst;
+	}
 }

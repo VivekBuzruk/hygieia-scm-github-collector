@@ -192,67 +192,81 @@ public class GitHubCollectorTask extends CollectorTask<Collector> {
          }
             
          for (GitHubRepo repo : enabledRepos(collector)) {
-            if (repo.getErrorCount() < gitHubSettings.getErrorThreshold()) {
-                boolean firstRun = ((repo.getLastUpdated() == 0) || ((start - repo.getLastUpdated()) > FOURTEEN_DAYS_MILLISECONDS));
-                repo.removeLastUpdateDate();  //moved last update date to collector item. This is to clean old data.
-                try {
-                    LOG.info(repo.getOptions().toString() + "::" + repo.getBranch() + ":: get commits");
-                    // Step 1: Get all the commits
-                    for (Commit commit : gitHubClient.getCommits(repo, firstRun, commitExclusionPatterns)) {
-                        LOG.debug(commit.getTimestamp() + ":::" + commit.getScmCommitLog());
-                        if (isNewCommit(repo, commit)) {
-                            commit.setCollectorItemId(repo.getId());
-                            commitRepository.save(commit);
-                            commitCount++;
-                        }
-                    }
+             boolean noErrThreshold = repo.getErrorCount() < gitHubSettings.getErrorThreshold();
+             if (noErrThreshold || gitHubSettings.getIgnore_errorThreshold()) {
+                 boolean firstRun = ((repo.getLastUpdated() == 0) || gitHubSettings.getBootRunFirst()
+                         || ((start - repo.getLastUpdated()) > FOURTEEN_DAYS_MILLISECONDS));
+                 repo.removeLastUpdateDate(); // moved last update date to collector item. This is to clean old data.
+                 try {
+                     LOG.info(repo.getOptions().toString() + "::" + repo.getBranch() + ":: get commits");
+                     // Step 1: Get all the commits
+                     long repoUpdateStart = System.currentTimeMillis();
+                     for (Commit commit : gitHubClient.getCommits(repo, firstRun, commitExclusionPatterns)) {
+                         LOG.debug(commit.getTimestamp() + ":::" + commit.getScmCommitLog());
+                         if (isNewCommit(repo, commit)) {
+                             commit.setCollectorItemId(repo.getId());
+                             commitRepository.save(commit);
+                             commitCount++;
+                         }
+                     }
 
-                    // Step 2: Get all the issues
-                    LOG.info(repo.getOptions().toString() + "::" + repo.getBranch() + " get issues");
-                    List<GitRequest> issues = gitHubClient.getIssues(repo, firstRun);
-                    issueCount += processList(repo, issues, "issue");
+                     // Step 2: Get all the issues
+                     LOG.info(repo.getOptions().toString() + "::" + repo.getBranch() + " get issues");
+                     List<GitRequest> issues = gitHubClient.getIssues(repo, firstRun);
+                     issueCount += processList(repo, issues, "issue");
 
-                    //Step 2: Get all the Pull Requests
-                    LOG.info(repo.getOptions().toString() + "::" + repo.getBranch() + "::get pulls");
-                    List<GitRequest> allPRs = gitRequestRepository.findRequestNumberAndLastUpdated(repo.getId(), "pull");
+                     // Step 2: Get all the Pull Requests
+                     LOG.info(repo.getOptions().toString() + "::" + repo.getBranch() + "::get pulls");
+                     List<GitRequest> allPRs = gitRequestRepository.findRequestNumberAndLastUpdated(repo.getId(),
+                             "pull");
 
-                    Map<Long, String> prCloseMap = allPRs.stream().collect(
-                            Collectors.toMap(GitRequest::getUpdatedAt, GitRequest::getNumber,
-                                    (oldValue, newValue) -> oldValue
-                            )
-                    );
-                    List<GitRequest> pulls = gitHubClient.getPulls(repo, "all", firstRun, prCloseMap);
-                    pullCount += processList(repo, pulls, "pull");
+                     Map<Long, String> prCloseMap = allPRs.stream().collect(Collectors.toMap(GitRequest::getUpdatedAt,
+                             GitRequest::getNumber, (oldValue, newValue) -> oldValue));
+                     List<GitRequest> pulls = gitHubClient.getPulls(repo, "all", firstRun, prCloseMap);
+                     pullCount += processList(repo, pulls, "pull");
 
-                    repo.setLastUpdated(System.currentTimeMillis());
-                } catch (HttpStatusCodeException hc) {
-                    LOG.error("Error fetching commits for:" + repo.getRepoUrl(), hc);
-                    if (! (isRateLimitError(hc) || hc.getStatusCode() == HttpStatus.SERVICE_UNAVAILABLE) ) {
-                        CollectionError error = new CollectionError(hc.getStatusCode().toString(), hc.getMessage());
-                        repo.getErrors().add(error);
-                    }
-                } catch (ResourceAccessException ex) {
-                    //handle case where repo is valid but github returns connection refused due to outages??
-                    if (ex.getMessage() != null && ex.getMessage().contains("Connection refused")) {
-                        LOG.error("Error fetching commits for:" + repo.getRepoUrl(), ex);
-                    } else {
-                        LOG.error("Error fetching commits for:" + repo.getRepoUrl(), ex);
-                        CollectionError error = new CollectionError(CollectionError.UNKNOWN_HOST, repo.getRepoUrl());
-                        repo.getErrors().add(error);
-                    }
-                } catch (RestClientException | MalformedURLException ex) {
-                    LOG.error("Error fetching commits for:" + repo.getRepoUrl(), ex);
-                    CollectionError error = new CollectionError(CollectionError.UNKNOWN_HOST, repo.getRepoUrl());
-                    repo.getErrors().add(error);
-                } catch (HygieiaException he) {
-                    LOG.error("Error fetching commits for:" + repo.getRepoUrl(), he);
-                    CollectionError error = new CollectionError("Bad repo url", repo.getRepoUrl());
-                    repo.getErrors().add(error);
-                }
-                gitHubRepoRepository.save(repo);
-            }
-            repoCount++;
-        }
+                     repo.setLastUpdated(repoUpdateStart); // System.currentTimeMillis());
+                     repo.getErrors().clear();
+                     gitHubSettings.setBootRunFirst(false);
+                 } catch (HttpStatusCodeException hc) {
+                     LOG.error("Error fetching commits for:" + repo.getRepoUrl(), hc);
+                     if (!(isRateLimitError(hc) || hc.getStatusCode() == HttpStatus.SERVICE_UNAVAILABLE)) {
+                         if (noErrThreshold) {
+                             CollectionError error = new CollectionError(hc.getStatusCode().toString(),
+                                     hc.getMessage());
+                             repo.getErrors().add(error);
+                         }
+                     }
+                 } catch (ResourceAccessException ex) {
+                     // handle case where repo is valid but github returns connection refused due to
+                     // outages??
+                     if (ex.getMessage() != null && ex.getMessage().contains("Connection refused")) {
+                         LOG.error("Error fetching commits for:" + repo.getRepoUrl(), ex);
+                     } else {
+                         LOG.error("Error fetching commits for:" + repo.getRepoUrl(), ex);
+                         if (noErrThreshold) {
+                             CollectionError error = new CollectionError(CollectionError.UNKNOWN_HOST,
+                                     repo.getRepoUrl());
+                             repo.getErrors().add(error);
+                         }
+                     }
+                 } catch (RestClientException | MalformedURLException ex) {
+                     LOG.error("Error fetching commits for:" + repo.getRepoUrl(), ex);
+                     if (noErrThreshold) {
+                         CollectionError error = new CollectionError(CollectionError.UNKNOWN_HOST, repo.getRepoUrl());
+                         repo.getErrors().add(error);
+                     }
+                 } catch (HygieiaException he) {
+                     LOG.error("Error fetching commits for:" + repo.getRepoUrl(), he);
+                     if (noErrThreshold) {
+                         CollectionError error = new CollectionError("Bad repo url", repo.getRepoUrl());
+                         repo.getErrors().add(error);
+                     }
+                 }
+                 gitHubRepoRepository.save(repo);
+             }
+             repoCount++;
+         }
         log("Repo Count", start, repoCount);
         log("New Commits", start, commitCount);
         log("New Pulls", start, pullCount);
